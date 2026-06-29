@@ -1,0 +1,15 @@
+# Entorno virtual
+*-venv/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Configuración local / secretos
+.env
+
+# Sistema
+.DS_Store
