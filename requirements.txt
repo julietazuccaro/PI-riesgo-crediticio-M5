@@ -9,7 +9,9 @@ ipykernel
 seaborn
 ipywidgets
 scikit-learn
+scipy
 xgboost
+streamlit
 pydantic
 fastapi
 uvicorn[standard]
