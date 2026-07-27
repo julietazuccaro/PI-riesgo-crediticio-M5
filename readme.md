@@ -1,5 +1,12 @@
 # 💳 Modelo de Riesgo Crediticio — Proyecto Integrador (Módulo 5)
 
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=julietazuccaro_PI-riesgo-crediticio-M5&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=julietazuccaro_PI-riesgo-crediticio-M5)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=julietazuccaro_PI-riesgo-crediticio-M5&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=julietazuccaro_PI-riesgo-crediticio-M5)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=julietazuccaro_PI-riesgo-crediticio-M5&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=julietazuccaro_PI-riesgo-crediticio-M5)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=julietazuccaro_PI-riesgo-crediticio-M5&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=julietazuccaro_PI-riesgo-crediticio-M5)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=julietazuccaro_PI-riesgo-crediticio-M5&metric=coverage)](https://sonarcloud.io/summary/new_code?id=julietazuccaro_PI-riesgo-crediticio-M5)
+[![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=julietazuccaro_PI-riesgo-crediticio-M5&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=julietazuccaro_PI-riesgo-crediticio-M5)
+
 Pipeline de MLOps para predecir el **comportamiento de pago** de los clientes de una
 financiera: dado un solicitante de crédito, estimar si **pagará a tiempo** o no.
 El proyecto cubre el ciclo completo: análisis de datos, ingeniería de características,
@@ -221,7 +228,7 @@ memoria: no hace falta el servidor ni Docker).
 
 ```bash
 # Desde la raíz del repositorio
-pytest -v                                  # 25 tests
+pytest -v                                  # 30 tests
 pytest --cov --cov-report=term             # con reporte de cobertura
 ```
 
@@ -249,18 +256,39 @@ a **SonarQube Cloud**, donde se evalúa mantenibilidad, seguridad, cobertura y e
 4. Generar un token en **My Account → Security** y cargarlo en el repositorio de GitHub como
    secreto `SONAR_TOKEN` (*Settings → Secrets and variables → Actions*).
 
-### Cobertura actual
+### Resultados del análisis
+
+| Dimensión | Resultado |
+|---|---|
+| **Mantenibilidad** (calidad del código) | **A** |
+| **Fiabilidad** | **A** |
+| **Seguridad** | **B** |
+| **Cobertura de pruebas** | **43,5%** |
+| **Líneas duplicadas** | **0%** |
+| Líneas de código analizadas | 872 |
+
+### Cobertura por módulo
 
 | Módulo | Cobertura | Comentario |
 |---|---|---|
-| `model_deploy.py` | **86%** | La API, cubierta por los 25 tests. |
+| `model_deploy.py` | **86%** | La API, cubierta por los 30 tests. |
 | `ft_engineering.py` | 65% | Cubierto por lo que la API ejercita. |
 | `Cargar_datos.py` | 33% | Sólo el bloque `__main__` queda sin cubrir. |
 | `model_training_evaluation.py` · `model_monitoring.py` | 0% | Scripts batch, sin tests propios todavía. |
 | `app_monitoreo.py` | — | Excluido: script de Streamlit que se ejecuta al importarse; se valida con `streamlit.testing.v1.AppTest`, que no genera reporte de cobertura. |
 
-Total del proyecto: **~35%**, concentrado en el componente que se despliega. Los scripts de
+La cobertura está concentrada en el componente que efectivamente se despliega. Los scripts de
 entrenamiento y monitoreo son el próximo objetivo natural para subir ese número.
+
+### Hallazgo de seguridad corregido
+
+El primer análisis detectó una vulnerabilidad de **log injection** (CWE-117) en
+`model_deploy.py`: el endpoint `/predict/csv` escribía en el log el nombre del archivo subido
+sin sanear. Un archivo llamado `x.csv\n2026-07-27 | INFO | Modelo cargado` habría insertado una
+entrada falsa en el registro, útil para falsear la auditoría o tapar el rastro de un ataque.
+
+Se corrigió con `_sanitizar_para_log()`, que elimina los saltos de línea y acota el largo antes
+de loguear, y se agregaron tests que cubren el caso.
 
 ---
 
