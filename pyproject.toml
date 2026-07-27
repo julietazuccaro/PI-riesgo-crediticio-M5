@@ -1,0 +1,22 @@
+# Configuración de las herramientas de desarrollo (pytest y coverage).
+# No declara un paquete instalable: el proyecto se ejecuta como scripts.
+
+[tool.pytest.ini_options]
+# El código vive en mlops_pipeline/src y usa imports planos
+# (`from ft_engineering import ...`). Con `pythonpath` esa carpeta se agrega al
+# sys.path, así los tests corren tanto desde la raíz del repo como desde src.
+pythonpath = ["mlops_pipeline/src"]
+testpaths = ["mlops_pipeline/src"]
+
+[tool.coverage.run]
+source = ["mlops_pipeline/src"]
+# Los tests no se miden a sí mismos.
+omit = ["*/test_*.py"]
+# Guarda rutas RELATIVAS en coverage.xml. Sin esto, el reporte generado en el
+# runner de GitHub queda con rutas absolutas (/home/runner/work/...) que Sonar
+# no puede hacer coincidir con los archivos del repositorio, y la cobertura
+# aparece en 0%.
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true

@@ -1,0 +1,60 @@
+# =============================================================================
+# CI: tests con cobertura + análisis de calidad en SonarQube Cloud
+# -----------------------------------------------------------------------------
+# Se ejecuta solo en GitHub (no hace falta correrlo localmente).
+#
+# Requisito previo: cargar el secreto SONAR_TOKEN en el repositorio
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+# =============================================================================
+
+name: SonarCloud
+
+on:
+  push:
+    branches: [main, developer, certification]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  analisis:
+    name: Tests y análisis de calidad
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v6
+        with:
+          # Sonar necesita el historial completo para atribuir cada issue a su
+          # commit y calcular el "New Code". Con el clon superficial por defecto
+          # el análisis pierde relevancia.
+          fetch-depth: 0
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          # Misma versión con la que se serializó el modelo y con la que corre
+          # la imagen Docker.
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-api.txt
+
+      - name: Instalar dependencias
+        # Se instalan sólo las dependencias de la API (versiones clavadas) más
+        # las de testing: el CI no necesita Jupyter, Streamlit ni XGBoost.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-api.txt
+          pip install pytest pytest-cov httpx
+
+      - name: Ejecutar los tests con cobertura
+        # Se corre desde la raíz para que las rutas de coverage.xml sean
+        # relativas al repositorio y Sonar pueda resolverlas.
+        # La configuración (pythonpath, source, relative_files) está en pyproject.toml.
+        run: pytest --cov --cov-report=xml --cov-report=term
+
+      - name: Análisis de SonarCloud
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          # Único secreto necesario: para SonarQube Cloud no se define
+          # SONAR_HOST_URL (la action ya apunta a la nube por defecto).
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
