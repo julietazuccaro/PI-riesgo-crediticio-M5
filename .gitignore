@@ -9,6 +9,11 @@ __pycache__/
 .ipynb_checkpoints/
 .pytest_cache/
 
+# Reportes de cobertura (los regenera el CI en cada corrida)
+.coverage
+coverage.xml
+htmlcov/
+
 # Configuración local / secretos
 .env
 

@@ -32,6 +32,9 @@ PI-riesgo-crediticio-M5/
 ├── requirements-api.txt            # Dependencias de la API (las que instala Docker)
 ├── Dockerfile                      # Imagen del servicio de predicción
 ├── .dockerignore
+├── pyproject.toml                  # Configuración de pytest y coverage
+├── sonar-project.properties        # Configuración del análisis de SonarCloud
+├── .github/workflows/sonarcloud.yml # CI: tests con cobertura + análisis de calidad
 ├── readme.md
 └── mlops_pipeline/
     └── src/
@@ -217,14 +220,47 @@ Decisiones de la imagen:
 memoria: no hace falta el servidor ni Docker).
 
 ```bash
-cd mlops_pipeline/src
-pytest -v
+# Desde la raíz del repositorio
+pytest -v                                  # 25 tests
+pytest --cov --cov-report=term             # con reporte de cobertura
 ```
 
 Qué se verifica: estructura de las respuestas, rechazo de entradas inválidas (campos
 faltantes, rangos, categorías desconocidas), coherencia del resumen de los lotes, las bandas
 de decisión de negocio, y que **un mismo registro dé el mismo resultado** por `/predict`,
 `/predict/batch` y `/predict/csv`.
+
+---
+
+## 🛡️ Calidad de código (SonarCloud)
+
+Cada push a `main`, `developer` o `certification` dispara el workflow
+`.github/workflows/sonarcloud.yml`, que ejecuta los tests con cobertura y envía el resultado
+a **SonarQube Cloud**, donde se evalúa mantenibilidad, seguridad, cobertura y estilo.
+
+### Puesta en marcha (una sola vez)
+
+1. Entrar a [sonarcloud.io](https://sonarcloud.io) con la cuenta de GitHub e importar el
+   repositorio.
+2. Copiar el **Project Key** y la **Organization** que genera SonarCloud y verificar que
+   coincidan con los de `sonar-project.properties`.
+3. En **Administration → Analysis Method**, **desactivar `Automatic Analysis`**. Es
+   obligatorio: si queda activo, choca con el análisis por CI y el workflow falla.
+4. Generar un token en **My Account → Security** y cargarlo en el repositorio de GitHub como
+   secreto `SONAR_TOKEN` (*Settings → Secrets and variables → Actions*).
+
+### Cobertura actual
+
+| Módulo | Cobertura | Comentario |
+|---|---|---|
+| `model_deploy.py` | **86%** | La API, cubierta por los 25 tests. |
+| `ft_engineering.py` | 65% | Cubierto por lo que la API ejercita. |
+| `Cargar_datos.py` | 33% | Sólo el bloque `__main__` queda sin cubrir. |
+| `model_training_evaluation.py` · `model_monitoring.py` | 0% | Scripts batch, sin tests propios todavía. |
+| `app_monitoreo.py` | — | Excluido: script de Streamlit que se ejecuta al importarse; se valida con `streamlit.testing.v1.AppTest`, que no genera reporte de cobertura. |
+
+Total del proyecto: **~35%**, concentrado en el componente que se despliega. Los scripts de
+entrenamiento y monitoreo son el próximo objetivo natural para subir ese número.
 
 ---
 
