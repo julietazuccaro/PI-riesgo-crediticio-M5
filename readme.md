@@ -81,7 +81,12 @@ PI-riesgo-crediticio-M5/
 
 ### Modelado
 - Modelos comparados: Regresión Logística, Random Forest, Gradient Boosting y XGBoost.
-- Selección por **AUC** y **recall de la clase morosa**, *no* por accuracy (por el desbalance).
+- Métricas: **ROC-AUC**, **precision**, **recall** y **F1** sobre la clase morosa, más F1-macro.
+  Selección por **AUC** y **recall de morosos**, *no* por accuracy (por el desbalance).
+- El intercambio **precision/recall** está analizado en la sección 5.3 del notebook: los modelos
+  de árbol tienen mejor precision (0.33–0.43) pero solo porque casi no emiten alertas
+  (recall 0.02–0.05); la regresión logística detecta el ~60% de los morosos a costa de más
+  falsos positivos, que es la posición preferible en riesgo crediticio.
 - `class_weight="balanced"` para compensar la clase minoritaria.
 - El ganador se serializa en `modelo_riesgo.joblib` junto con su metadata de trazabilidad
   (versión, fecha de entrenamiento, métricas, columnas y versiones del entorno).
