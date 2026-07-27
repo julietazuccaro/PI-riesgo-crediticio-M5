@@ -2,11 +2,24 @@
 Entrenamiento y evaluación de modelos de riesgo crediticio.
 
 Compara varios modelos supervisados, los evalúa con validación cruzada y
-selecciona el de mejor performance. Genera una tabla resumen y un gráfico comparativo.
+selecciona el de mejor performance. Genera una tabla resumen, un gráfico
+comparativo y **serializa el mejor modelo** en `modelo_riesgo.joblib`, que es
+el artefacto que después levanta la API (`model_deploy.py`).
+
+Ejecutar desde `mlops_pipeline/src`:
+    python model_training_evaluation.py
 """
 
-import pandas as pd
+import platform
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import joblib
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import sklearn
 
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
@@ -19,6 +32,16 @@ from sklearn.metrics import (
 )
 
 from ft_engineering import preparar_datos
+
+# Versión del modelo que se despliega (se guarda dentro del artefacto y la
+# expone la API en /modelo, para poder trazar qué versión hizo cada predicción).
+VERSION_MODELO = "1.3.0"
+
+# El artefacto se guarda junto al código, en mlops_pipeline/src/. Se usa una ruta
+# relativa al archivo (no al directorio de trabajo) para que funcione igual al
+# ejecutarlo localmente o dentro del contenedor Docker.
+RUTA_ARTEFACTO = Path(__file__).resolve().parent / "modelo_riesgo.joblib"
+
 
 def build_models() -> list:
     """Devuelve la lista de modelos candidatos a comparar (nombre, instancia)."""
@@ -104,6 +127,52 @@ def train_and_select_model(X_train, y_train, X_test, y_test, preprocesador):
     return resultados, mejor_modelo
 
 
+def guardar_modelo(pipeline, nombre: str, metricas: dict, columnas,
+                   ruta: Path = RUTA_ARTEFACTO) -> Path:
+    """Serializa el pipeline entrenado junto con su metadata (formato .joblib).
+
+    Se guarda el **pipeline completo** (preprocesador + clasificador), no sólo el
+    clasificador: así la API aplica exactamente las mismas imputaciones, escalados
+    y codificaciones que se usaron al entrenar.
+
+    Además del modelo se persiste metadata de trazabilidad, un principio básico de
+    MLOps: sin ella no se puede saber qué versión respondió una predicción ni
+    reproducir el entorno que la generó.
+
+    Parámetros
+    ----------
+    pipeline : Pipeline de sklearn ya entrenado (preprocesador + clf).
+    nombre : nombre del algoritmo ganador (p. ej. "LogisticRegression").
+    metricas : métricas de evaluación en test del modelo elegido.
+    columnas : columnas de entrada (en orden) con las que se entrenó.
+    ruta : destino del archivo .joblib.
+
+    Retorna
+    -------
+    Path del archivo generado.
+    """
+    artefacto = {
+        "modelo": pipeline,
+        "nombre": nombre,
+        "version": VERSION_MODELO,
+        "fecha_entrenamiento": datetime.now().isoformat(timespec="seconds"),
+        # Orden exacto de las columnas de entrada: la API reindexa con esta lista
+        # para no depender del orden en que lleguen los campos del JSON.
+        "columnas": list(columnas),
+        # np.float64 no es serializable a JSON -> se castea a float nativo.
+        "metricas": {k: float(v) for k, v in metricas.items()},
+        # Versiones del entorno: si no coinciden al deserializar, sklearn avisa.
+        "entorno": {
+            "python": platform.python_version(),
+            "scikit-learn": sklearn.__version__,
+            "pandas": pd.__version__,
+            "numpy": np.__version__,
+        },
+    }
+    joblib.dump(artefacto, ruta)
+    return ruta
+
+
 if __name__ == "__main__":
     # 1. Preparar datos (reutiliza ft_engineering)
     X_train, X_test, y_train, y_test, preprocesador = preparar_datos()
@@ -118,7 +187,17 @@ if __name__ == "__main__":
     print(resultados.round(3))
     print("\nMejor modelo:", mejor_modelo.named_steps["clf"].__class__.__name__)
 
-    # 4. Gráfico comparativo (recall de morosos y AUC por modelo):
+    # 4. Serializar el modelo ganador: es el artefacto que consume la API.
+    mejor_nombre = resultados.index[0]
+    ruta = guardar_modelo(
+        pipeline=mejor_modelo,
+        nombre=mejor_nombre,
+        metricas=resultados.loc[mejor_nombre].to_dict(),
+        columnas=X_train.columns,
+    )
+    print(f"Modelo serializado en {ruta}")
+
+    # 5. Gráfico comparativo (recall de morosos y AUC por modelo):
     #    las dos métricas que muestran si el modelo sirve para el negocio.
     resultados[["recall_moroso", "auc"]].plot(kind="bar", figsize=(8, 5))
     plt.title("Comparación de modelos: recall de morosos y AUC")

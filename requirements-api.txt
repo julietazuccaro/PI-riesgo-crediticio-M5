@@ -1,0 +1,22 @@
+# Dependencias EXCLUSIVAS de la API en producción (las que instala el Dockerfile).
+#
+# Se separan del requirements.txt de desarrollo para que la imagen no cargue con
+# Jupyter, Streamlit, XGBoost ni matplotlib, que el servicio nunca usa.
+#
+# Las versiones están CLAVADAS a propósito: el modelo se serializa con pickle,
+# que guarda la estructura interna de los objetos de scikit-learn. Si la versión
+# que deserializa no es la misma que la que serializó, la carga puede fallar o —
+# peor todavía — funcionar pero devolver predicciones distintas.
+
+# --- Servicio web ---
+fastapi==0.138.2
+uvicorn[standard]==0.49.0
+pydantic==2.13.4
+python-multipart==0.0.32   # necesario para recibir archivos en /predict/csv
+
+# --- Stack de datos y modelo (deben coincidir con el entorno de entrenamiento) ---
+pandas==3.0.3
+numpy==2.5.0
+scikit-learn==1.9.0
+scipy==1.18.0
+joblib==1.5.3

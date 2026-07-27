@@ -1,0 +1,36 @@
+# Archivos que NO se envían al daemon de Docker al construir la imagen.
+# Reduce el contexto de build (más rápido) y evita filtrar datos o credenciales
+# dentro de la imagen final.
+
+# Entornos virtuales y cachés de Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Control de versiones y configuración local
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.env
+
+# Datos: el dataset no va a la imagen. La API predice sobre los datos que le
+# llegan por HTTP, no sobre el histórico.
+*.csv
+*.xlsx
+
+# Notebooks, gráficos y documentación
+*.ipynb
+*.png
+readme.md
+
+# Tests: se ejecutan en el pipeline de CI, no dentro de la imagen de producción.
+test_*.py
+
+# El propio Dockerfile
+Dockerfile
+.dockerignore
