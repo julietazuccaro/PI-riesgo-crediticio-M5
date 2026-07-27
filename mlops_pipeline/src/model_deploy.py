@@ -249,6 +249,24 @@ def _ahora() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _sanitizar_para_log(texto: str, largo_max: int = 100) -> str:
+    """Neutraliza un texto controlado por el usuario antes de escribirlo en el log.
+
+    Cada entrada del log ocupa una línea. Si un dato que viene del usuario —como el
+    nombre de un archivo subido— contiene saltos de línea, puede inyectar entradas
+    falsas que parecen legítimas:
+
+        archivo llamado:  "x.csv\\n2026-07-27 | INFO | Modelo cargado"
+        en el log queda:  CSV 'x.csv'
+                          2026-07-27 | INFO | Modelo cargado   <- línea falsa
+
+    Es lo que se conoce como *log injection* (CWE-117) y sirve para falsear el
+    registro de auditoría o tapar el rastro de un ataque. Se eliminan los saltos de
+    línea y se acota el largo para que un nombre enorme no inunde el log.
+    """
+    return texto.replace("\n", "").replace("\r", "")[:largo_max]
+
+
 def predecir(df_crudo: pd.DataFrame, umbral: float) -> list[RespuestaPrediccion]:
     """Aplica el pipeline completo sobre datos crudos y arma las respuestas.
 
@@ -517,7 +535,9 @@ def predict_csv(
     respuesta = armar_respuesta_lote(predicciones, umbral)
     logger.info(
         "CSV '%s' | %d registros | %d de riesgo alto",
-        archivo.filename, respuesta.resumen.total_registros, respuesta.resumen.riesgo_alto,
+        _sanitizar_para_log(archivo.filename),
+        respuesta.resumen.total_registros,
+        respuesta.resumen.riesgo_alto,
     )
 
     if formato == "csv":

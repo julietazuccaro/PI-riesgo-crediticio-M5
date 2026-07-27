@@ -25,7 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ft_engineering import COLUMNAS_REQUERIDAS
-from model_deploy import app, clasificar_riesgo
+from model_deploy import _sanitizar_para_log, app, clasificar_riesgo
 
 # Solicitud de referencia: un cliente "promedio" del dataset. Se usa como base
 # en casi todos los tests y se modifica puntualmente cuando hace falta.
@@ -254,6 +254,33 @@ def test_csv_rechaza_extension_invalida(client):
 )
 def test_clasificar_riesgo_aplica_las_bandas_de_decision(probabilidad, esperado):
     assert clasificar_riesgo(probabilidad, umbral=0.5) == esperado
+
+
+@pytest.mark.parametrize(
+    "entrada, esperado",
+    [
+        ("solicitudes.csv", "solicitudes.csv"),                       # caso normal: no toca nada
+        ("x.csv\nINFO | linea falsa", "x.csvINFO | linea falsa"),     # salto de línea inyectado
+        ("x.csv\r\notra linea", "x.csvotra linea"),                   # CRLF (archivos de Windows)
+    ],
+)
+def test_sanitizar_para_log_elimina_saltos_de_linea(entrada, esperado):
+    """Un nombre de archivo con saltos de línea podría inyectar entradas falsas
+    en el log y falsear el registro de auditoría (log injection, CWE-117)."""
+    assert _sanitizar_para_log(entrada) == esperado
+
+
+def test_sanitizar_para_log_acota_el_largo():
+    """Un nombre gigante no debe inundar el log."""
+    assert len(_sanitizar_para_log("a" * 500)) == 100
+
+
+def test_csv_con_nombre_malicioso_se_procesa_sin_romper(client):
+    """El saneado es sólo para el log: la predicción tiene que seguir funcionando."""
+    archivos = {"archivo": ("x\n.csv", csv_en_memoria(2), "text/csv")}
+    respuesta = client.post("/predict/csv", files=archivos)
+    assert respuesta.status_code == 200
+    assert respuesta.json()["resumen"]["total_registros"] == 2
 
 
 def test_columnas_requeridas_coinciden_con_el_esquema_de_la_api():
