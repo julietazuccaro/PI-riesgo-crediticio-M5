@@ -3,7 +3,8 @@
 Pipeline de MLOps para predecir el **comportamiento de pago** de los clientes de una
 financiera: dado un solicitante de crédito, estimar si **pagará a tiempo** o no.
 El proyecto cubre el ciclo completo: análisis de datos, ingeniería de características,
-entrenamiento y selección de modelos, y **monitoreo de data drift** en producción.
+entrenamiento y selección de modelos, **monitoreo de data drift** y **despliegue del
+modelo como API REST dockerizada**.
 
 ---
 
@@ -27,17 +28,22 @@ riesgo de mora** (`Pago_atiempo = 0`), para apoyar la decisión de otorgamiento.
 ```
 PI-riesgo-crediticio-M5/
 ├── Base_de_datos.csv               # Dataset de ejemplo
-├── requirements.txt                # Dependencias
+├── requirements.txt                # Dependencias de desarrollo
+├── requirements-api.txt            # Dependencias de la API (las que instala Docker)
+├── Dockerfile                      # Imagen del servicio de predicción
+├── .dockerignore
 ├── readme.md
 └── mlops_pipeline/
     └── src/
         ├── Cargar_datos.py                 # Ingesta de datos
         ├── comprension_eda.ipynb           # EDA + análisis del modelado
         ├── ft_engineering.py               # Pipeline de datos (limpieza + preprocesamiento)
-        ├── model_training_evaluation.py    # Entrenamiento y selección de modelos
+        ├── model_training_evaluation.py    # Entrenamiento, selección y serialización
         ├── model_monitoring.py             # Métricas de data drift
         ├── app_monitoreo.py                # App de Streamlit (monitoreo)
-        └── model_deploy.py                 # Despliegue (avance siguiente)
+        ├── model_deploy.py                 # API REST con FastAPI
+        ├── test_model_deploy.py            # Tests automatizados de la API
+        └── modelo_riesgo.joblib            # Modelo entrenado (artefacto de despliegue)
 ```
 
 ---
@@ -49,8 +55,9 @@ PI-riesgo-crediticio-M5/
 | **1. Ingesta** | `Cargar_datos.py` | Carga el dataset (simula la lectura del Data Warehouse). |
 | **2. EDA** | `comprension_eda.ipynb` | Análisis univariable, bivariable y multivariable. |
 | **3. Ingeniería de características** | `ft_engineering.py` | Limpieza, imputación, escalado, codificación y features nuevos. |
-| **4. Modelado** | `model_training_evaluation.py` | Compara 4 modelos con validación cruzada y elige el mejor. |
+| **4. Modelado** | `model_training_evaluation.py` | Compara 4 modelos con validación cruzada, elige el mejor y lo serializa. |
 | **5. Monitoreo** | `model_monitoring.py` + `app_monitoreo.py` | Mide data drift en el tiempo y genera alertas. |
+| **6. Despliegue** | `model_deploy.py` + `Dockerfile` | Expone el modelo como API REST y la empaqueta en un contenedor. |
 
 ### Ingeniería de características
 - Limpieza de `tendencia_ingresos` (valores inválidos → `NaN`).
@@ -58,11 +65,16 @@ PI-riesgo-crediticio-M5/
   vía `ColumnTransformer`, ajustado **solo con el set de entrenamiento** (sin data leakage).
 - Features nuevos con sentido de negocio: `ratio_cuota_salario` y `ratio_deuda_ingreso`.
 - Partición train/test **estratificada** por el desbalance.
+- Las transformaciones que no aprenden de los datos están aisladas en `preparar_features()`,
+  que usan **tanto el entrenamiento como la API**. Así se evita el *training/serving skew*:
+  que en producción el modelo reciba features calculadas de otra forma.
 
 ### Modelado
 - Modelos comparados: Regresión Logística, Random Forest, Gradient Boosting y XGBoost.
 - Selección por **AUC** y **recall de la clase morosa**, *no* por accuracy (por el desbalance).
 - `class_weight="balanced"` para compensar la clase minoritaria.
+- El ganador se serializa en `modelo_riesgo.joblib` junto con su metadata de trazabilidad
+  (versión, fecha de entrenamiento, métricas, columnas y versiones del entorno).
 
 ### Monitoreo de data drift
 - Se usa `fecha_prestamo` para dividir la población en una **ventana de referencia**
@@ -77,6 +89,142 @@ PI-riesgo-crediticio-M5/
   | **Chi-cuadrado** | categórica | Cambio en las proporciones de categorías |
 
 - Umbrales de PSI: 🟢 < 0.10 · 🟡 0.10–0.25 · 🔴 > 0.25.
+
+---
+
+## 🌐 API de predicción
+
+`model_deploy.py` levanta un servicio **FastAPI** que carga el modelo serializado una sola
+vez al arrancar y lo expone por HTTP. La API recibe los datos **crudos** del solicitante:
+todo el preprocesamiento viaja dentro del pipeline serializado.
+
+### Endpoints
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| `GET` | `/` | Información del servicio y sus rutas. |
+| `GET` | `/health` | Estado del servicio (200 = ok · 503 = degradado, sin modelo). |
+| `GET` | `/modelo` | Metadata del modelo en producción: versión, fecha, métricas y campos requeridos. |
+| `POST` | `/predict` | Predicción individual (JSON). |
+| `POST` | `/predict/batch` | **Predicción por lotes**: N solicitudes en una sola llamada. |
+| `POST` | `/predict/csv` | Predicción por lotes subiendo un archivo CSV (respuesta en JSON o CSV). |
+| `GET` | `/docs` | **Documentación interactiva (Swagger UI)**, generada automáticamente. |
+
+Todos los endpoints de predicción aceptan el parámetro `?umbral=` (0.01–0.99, por defecto
+`0.5`): la probabilidad de mora a partir de la cual se rechaza la solicitud. Es una perilla
+de **negocio**, no del modelo — bajarla detecta más morosos pero rechaza más buenos clientes.
+
+### Respuesta
+
+Además de la probabilidad, la API devuelve una lectura accionable para el analista de riesgo:
+
+| Condición | `nivel_riesgo` | `decision_sugerida` |
+|---|---|---|
+| `prob_mora ≥ umbral` | `ALTO` | `RECHAZAR` |
+| `70% del umbral ≤ prob_mora < umbral` | `MEDIO` | `REVISAR` (derivación manual) |
+| `prob_mora < 70% del umbral` | `BAJO` | `APROBAR` |
+
+```jsonc
+{
+  "id_solicitud": "8f3c...",        // trazabilidad de cada predicción
+  "probabilidad_mora": 0.412,
+  "probabilidad_pago": 0.588,
+  "prediccion": 1,                  // 1 = paga a tiempo · 0 = riesgo de mora
+  "etiqueta": "Paga a tiempo",
+  "nivel_riesgo": "MEDIO",
+  "decision_sugerida": "REVISAR",
+  "umbral": 0.5,
+  "version_modelo": "1.3.0",
+  "timestamp": "2026-07-27T13:48:02+00:00"
+}
+```
+
+### Levantar la API localmente
+
+```bash
+cd mlops_pipeline/src
+uvicorn model_deploy:app --reload --port 8000
+# -> http://localhost:8000/docs
+```
+
+> ⚠️ La API necesita `modelo_riesgo.joblib`. Si no existe, levanta en modo **degradado**
+> (`/health` responde 503). Se genera con `python model_training_evaluation.py`.
+
+### Ejemplos de uso
+
+```bash
+# Predicción individual
+curl -X POST "http://localhost:8000/predict" \
+  -H "Content-Type: application/json" \
+  -d '{"tipo_credito":7,"capital_prestado":2500000,"plazo_meses":12,"edad_cliente":44,
+       "tipo_laboral":"Empleado","salario_cliente":3200000,"total_otros_prestamos":5800000,
+       "cuota_pactada":245000,"puntaje_datacredito":780,"cant_creditosvigentes":5,
+       "huella_consulta":4,"saldo_mora":0,"saldo_total":45000,"saldo_principal":40000,
+       "saldo_mora_codeudor":0,"creditos_sectorFinanciero":3,"creditos_sectorCooperativo":0,
+       "creditos_sectorReal":1,"promedio_ingresos_datacredito":2000000,
+       "tendencia_ingresos":"Estable"}'
+
+# Predicción por lotes desde un CSV, con umbral más estricto
+curl -X POST "http://localhost:8000/predict/csv?umbral=0.4&formato=csv" \
+  -F "archivo=@solicitudes.csv" -o predicciones.csv
+```
+
+### Validación de entradas
+
+- **`/predict` y `/predict/batch`** (consumo online, desde formularios): validación estricta
+  con **Pydantic**. Tipos, rangos y categorías permitidas; ante un error responde `422` con
+  el detalle del campo, sin llegar a tocar el modelo.
+- **`/predict/csv`** (consumo batch, desde el ETL interno): se valida el **esquema**
+  (que estén todas las columnas requeridas, con un `400` que las nombra), pero no los rangos.
+  Forzarlos haría fallar el lote entero por unos pocos atípicos del histórico — por ejemplo,
+  hay 150 registros con edad > 100. Esos valores ya los absorbe la imputación del pipeline.
+
+---
+
+## 🐳 Contenedor Docker
+
+La imagen empaqueta el código, el modelo, las dependencias y el servidor Uvicorn.
+
+```bash
+# Construir (desde la raíz del repositorio)
+docker build -t riesgo-crediticio-api:1.3.0 .
+
+# Ejecutar
+docker run -p 8000:8000 riesgo-crediticio-api:1.3.0
+# -> http://localhost:8000/docs
+
+# Verificar el estado
+curl http://localhost:8000/health
+```
+
+Decisiones de la imagen:
+
+| Decisión | Por qué |
+|---|---|
+| Base `python:3.12-slim` | Imagen mínima; la versión de Python se fija porque el modelo se deserializa con `pickle`. |
+| `requirements-api.txt` en vez de `requirements.txt` | La imagen no necesita Jupyter, Streamlit, XGBoost ni matplotlib: menos peso, build más rápido y menos superficie de ataque. |
+| Versiones **clavadas** | `pickle` guarda la estructura interna de los objetos de scikit-learn: si la versión que deserializa no coincide, la carga falla o devuelve resultados distintos. |
+| Dependencias antes que el código | Aprovecha la caché de capas: cambiar un `.py` no reinstala todo el stack. |
+| Usuario `apiuser` (no root) | Limita el impacto de una eventual vulnerabilidad en el servicio. |
+| `HEALTHCHECK` sobre `/health` | Docker marca el contenedor como *unhealthy* si el modelo no cargó. |
+| `--host 0.0.0.0` | Sin esto Uvicorn sólo escucharía dentro del contenedor y `-p` no serviría. |
+
+---
+
+## 🧪 Tests
+
+`test_model_deploy.py` cubre los endpoints con el `TestClient` de FastAPI (levanta la app en
+memoria: no hace falta el servidor ni Docker).
+
+```bash
+cd mlops_pipeline/src
+pytest -v
+```
+
+Qué se verifica: estructura de las respuestas, rechazo de entradas inválidas (campos
+faltantes, rangos, categorías desconocidas), coherencia del resumen de los lotes, las bandas
+de decisión de negocio, y que **un mismo registro dé el mismo resultado** por `/predict`,
+`/predict/batch` y `/predict/csv`.
 
 ---
 
@@ -100,21 +248,27 @@ PI-riesgo-crediticio-M5/
 ## 🚀 Cómo ejecutar
 
 ```bash
-# 1. Crear y activar el entorno virtual (Python 3.11)
+# 1. Crear y activar el entorno virtual
 python -m venv .venv
 .venv\Scripts\Activate.ps1        # Windows (PowerShell)
 
 # 2. Instalar dependencias
 pip install -r requirements.txt
 
-# 3. Ejecutar los scripts (desde mlops_pipeline/src)
+# 3. Ejecutar el pipeline (desde mlops_pipeline/src)
 cd mlops_pipeline/src
 python ft_engineering.py                 # prepara los datos
-python model_training_evaluation.py      # entrena y compara modelos
+python model_training_evaluation.py      # entrena, compara y serializa el mejor modelo
 python model_monitoring.py               # reporte de drift por consola
 
-# 4. Levantar la app de monitoreo
-streamlit run app_monitoreo.py           # abre http://localhost:8501
+# 4. App de monitoreo (Streamlit)
+streamlit run app_monitoreo.py           # http://localhost:8501
+
+# 5. API de predicción (FastAPI)
+uvicorn model_deploy:app --reload        # http://localhost:8000/docs
+
+# 6. Tests
+pytest -v
 ```
 
 ---
@@ -127,6 +281,7 @@ streamlit run app_monitoreo.py           # abre http://localhost:8501
 | `v1.0.1` | Análisis exploratorio de datos (EDA) |
 | `v1.1.0` | Ingeniería de características y modelado supervisado |
 | `v1.2.0` | Monitoreo de data drift + app de Streamlit |
+| `v1.3.0` | Despliegue: API REST con FastAPI + imagen Docker + tests |
 
 Flujo de trabajo con ramas `developer` → `main` mediante Pull Requests.
 

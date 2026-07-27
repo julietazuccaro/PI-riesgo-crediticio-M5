@@ -7,11 +7,16 @@ jupyter
 notebook
 ipykernel
 seaborn
+matplotlib
 ipywidgets
 scikit-learn
 scipy
 xgboost
+joblib
 streamlit
 pydantic
 fastapi
 uvicorn[standard]
+python-multipart
+pytest
+httpx
